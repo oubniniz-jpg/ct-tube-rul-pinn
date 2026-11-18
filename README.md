@@ -11,8 +11,7 @@ Z. Oubnini, F. Wang — AFRICAI Workshop, MICCAI 2026 (Springer LNCS, vol. 17264
 ## Overview
 CT X-ray tubes are expensive, and in low-resource hospitals each unplanned failure
 causes weeks of scanner downtime. Real hospitals record only a few failure dates, not
-continuous sensor data, so standard deep learning cannot be trained directly. This
-project:
+continuous sensor data, so standard deep learning cannot be trained directly. This project:
 - builds a **physics-based degradation simulator** of the X-ray tube (anode heating,
   filament evaporation, thermal stress, bearing wear, calendar aging);
 - calibrates it as a **digital twin** against real failure records from two hospitals;
