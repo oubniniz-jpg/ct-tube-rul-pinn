@@ -1,0 +1,170 @@
+# ============================================================
+# CT-Scanner X-Ray Tube Predictive Maintenance - Configuration
+# ============================================================
+
+# --- Physical Parameters (GE Healthcare CT Scanner) ---
+physics:
+  # Anode thermal model
+  anode:
+    density: 10220.0               # kg/m³ (Tungsten)
+    specific_heat: 134.0           # J/(kg·K)
+    thermal_conductivity: 173.0    # W/(m·K)
+    initial_temperature: 305.0     # K (CHU Ibn Rochd: ambient ~32°C - Waid 2023)
+    max_temperature: 3695.0        # K (tungsten melting point)
+    thermal_expansion_coeff: 0.0000045  # 1/K
+    youngs_modulus: 411000000000.0      # Pa
+    # Lumped thermal model geometry:
+    #   thermal_volume  = effective mass volume (small focal-track heated zone)
+    #   radiating_area  = full disc surface area (for Stefan-Boltzmann cooling)
+    # Separating the two is essential: the focal spot heats a tiny region but the
+    # whole spinning disc (Ø~200 mm) radiates heat away continuously.
+    thermal_volume: 0.0001         # m³ — focal-track heated zone (~100 cm³)
+    radiating_area: 0.05           # m² — both faces of Ø~180 mm disc ≈ 0.051 m²
+    emissivity: 0.6                # tungsten at ~1500 K (higher than at room temp)
+
+  # Filament model (Richardson-Dushman)
+  filament:
+    richardson_constant: 602000.0    # A/(m²·K²) for tungsten
+    work_function: 4.55              # eV for tungsten
+    initial_diameter: 0.0002         # m (200 μm)
+    critical_diameter: 0.00005       # m (50 μm - failure threshold)
+    # evaporation_rate_coeff calibrated so filament failure (~63% of CHU Ibn Rochd
+    # cases) occurs at ~395 days (118,500 cycles at 300 scans/day).
+    # At steady-state anode temp ~1800 K: rate ≈ coeff * exp(1.8) ≈ 6.05 * coeff
+    # Need: 150 μm reduction over 118,500 cycles × 5 s scan = 592,500 s total
+    # → coeff ≈ 1.5e-10 / (6.05 * 592500) ≈ 4.2e-17 ... but exp scaling means
+    # higher temps dominate. Empirically tuned to 2.5e-11 for target lifespan.
+    evaporation_rate_coeff: 0.000000000112   # 1.12e-10 (calibrated 2026-09: CHU 408 d at ~100 CT/day, the honest workload; earlier 4.1e-11 was tuned to an unsourceable 300/day)
+
+  # Vacuum model
+  vacuum:
+    initial_pressure: 0.000001      # Pa (high vacuum)
+    failure_pressure: 0.001         # Pa (degraded vacuum → arcing onset)
+    outgassing_rate: 0.0000000001   # Pa/cycle
+    # Arcing model (Tang 2026 taxonomy: "arcing" is one of 2 primary failure modes)
+    arcing_threshold: 0.0001        # Pa — above this, arcing probability rises
+    arcing_base_prob: 0.00001       # baseline arcing probability per cycle
+
+  # Oil jacket thermal coupling (Zhou 2024: oil temperature is #1 predictive feature)
+  oil_jacket:
+    initial_temperature: 305.0      # K (32°C, tracks ambient at startup)
+    coupling_coefficient: 0.02      # dimensionless — fraction of anode heat transferred per cycle
+    cooling_coefficient: 0.005      # dimensionless — passive cooling toward ambient
+    max_temperature: 373.0          # K (100°C — oil boiling limit)
+
+  # Rotor / mechanical vibration model (Shamim 2024 uses rotor_vibration as feature)
+  rotor:
+    nominal_frequency: 150.0        # Hz (anode rotation ~9000 rpm)
+    nominal_vibration_rms: 0.5      # mm/s baseline
+    bearing_wear_rate: 0.0000001    # dimensionless per cycle
+    vibration_failure_rms: 4.5      # mm/s — ISO 10816 critical threshold
+
+  # Calendar-age degradation (INNOVATION 1): time-driven mechanisms that age a
+  # tube even when lightly used — vacuum/gas-load rise, bearing-grease oxidation,
+  # HV insulation and seal aging, getter saturation. Competes with the usage-driven
+  # modes above (weakest link): usage dominates at high workload, calendar age
+  # dominates at low workload. Lets one calibrated model match tube life across the
+  # full workload range (fixes the conference paper's low-workload over-prediction).
+  aging:
+    characteristic_life_days: 970.0   # calibrated on N=200 stable mean: Tetouan ~13/day -> ~854 d (real)
+    thermal_acceleration: 0.4        # hotter/busier operation ages seals & vacuum faster
+    variability_std: 0.15            # per-tube spread in calendar life
+    min_life_fraction: 0.4           # floor on sampled per-tube life (avoids near-zero draws)
+
+# --- Simulation Parameters ---
+# Calibrated to CHU Ibn Rochd conditions:
+#   - Zakaria PFE 2023: 11 tube failures in 13 years, mean lifespan 395 days
+#   - Waid PFE 2023: cooling system air-based, 4-12h daily operation,
+#     ambient 20-30°C (often >30°C), 100% report cooling failures
+simulation:
+  num_tubes: 200               # number of synthetic tube histories
+  max_cycles: 150000           # max scan cycles per tube (higher for realistic lifespans)
+  time_step: 1.0               # seconds per simulation step
+  scan_duration: 5.0           # seconds per scan
+  cooling_duration: 12.0       # seconds between scans (reduced: insufficient cooling, Waid 2023)
+  cooling_efficiency: 0.7      # degraded cooling (30% less efficient than spec, Waid 2023)
+  ambient_temperature: 305.0   # K (32°C - high ambient, Moroccan climate)
+  scans_per_day_mean: 100      # CHU defensible estimate ~90-120 CT/day (activity reports); NOT 300 (unsourceable per chiffres-cles-2018 notes)
+  scans_per_day_std: 80        # workload variability
+  target_lifespan_days: 404    # CHU real mean lifespan (n=11 tubes, 2012-2024)
+
+# --- Data Parameters ---
+data:
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  synthetic_dir: "data/synthetic"
+  sequence_length: 30          # time steps per input window
+  train_ratio: 0.7
+  val_ratio: 0.15
+  test_ratio: 0.15
+
+# --- Model Parameters ---
+model:
+  type: "lstm"                 # "lstm" or "cnn_lstm"
+  # Feature set aligned with state-of-the-art CT tube PM literature:
+  #   - Pomšár 2025 (55 sensors)
+  #   - Shamim 2024 (filament_current, cathode_temp, vacuum_pressure, rotor_vibration)
+  #   - Zhou 2024 (oil_temperature = #1 feature)
+  #   - Tang 2026 (overheating + arcing taxonomy)
+  # Feature set covers the channels used across the CT-tube PM literature.
+  # NOTE: reduced 12 -> 9. Removed scan_cycle, cumulative_stress_pa,
+  # filament_diameter_m to eliminate target leakage (unmeasurable on a real
+  # tube AND monotonic with age, i.e. they encode the RUL answer directly).
+  input_features: 9
+  feature_names:
+    - anode_temperature       # K  (from thermal model)
+    - oil_temperature         # K  (Zhou 2024 — #1 predictive feature)
+    - tube_voltage_kv         # kV
+    - tube_current_ma         # mA
+    - filament_current_a      # A  (Shamim 2024; derived from Richardson-Dushman)
+    - vacuum_pressure_pa      # Pa (Tang 2026 arcing indicator)
+    - rotor_vibration_rms     # mm/s (Shamim 2024)
+    - thermal_stress_pa       # Pa (instantaneous σ = E·α·ΔT)
+    - ambient_temperature_k   # K  (Waid 2023 hospital context)
+  hidden_size: 64
+  num_layers: 2
+  dropout: 0.2
+  output_size: 1               # RUL prediction
+
+  # Failure mode taxonomy (Tang 2026 clinical split + filament mode from CHU Ibn Rochd).
+  # NOTE: under the CHU Ibn Rochd high-workload calibration, filament_failure is the
+  # RATE-LIMITING mode and accounts for ~100% of simulated failures (real data: 64%
+  # filament). The other three modes are retained because their physics sub-models
+  # still GENERATE sensor channels (oil_temp, vacuum_pressure, rotor_vibration,
+  # thermal_stress) used as model inputs, even though they rarely trigger failure.
+  failure_modes:
+    - overheating              # anode thermal runaway
+    - arcing                   # vacuum breakdown / HV arc
+    - filament_failure         # filament thinning below critical diameter
+    - rotor_bearing_failure    # mechanical bearing wear
+
+  # CNN parameters (for cnn_lstm variant)
+  cnn:
+    channels: [32, 64]
+    kernel_size: 3
+
+# --- Training Parameters ---
+training:
+  epochs: 200
+  batch_size: 32
+  learning_rate: 0.001
+  weight_decay: 0.00001
+  physics_loss_weight: 0.3     # λ in hybrid loss: L = L_data + λ * L_physics
+  early_stopping_patience: 20
+  scheduler_step_size: 50
+  scheduler_gamma: 0.5
+
+# --- Evaluation Metrics ---
+evaluation:
+  # ML regression metrics (standard RUL literature)
+  ml_metrics: ["rmse", "mae", "r2", "precision", "recall"]
+  # Clinical reliability engineering metrics (Luan 2026 vocabulary)
+  # Reported alongside ML metrics so the thesis speaks to both communities.
+  reliability_metrics: ["mtbf_hours", "mttr_hours", "mtbm_hours", "availability"]
+  # RUL prediction horizons (Tang 2026 reports accuracy at specific time windows)
+  rul_horizons: ["1h", "1d", "1w", "1mo"]
+  # Calibration targets for simulation
+  calibration:
+    target_mean_lifespan_days: 395      # CHU Ibn Rochd (Zakaria PFE 2023)
+    target_mtbf_hours: 8554             # Luan 2026 uCT790 baseline
+    tolerance_days: 60                  # acceptable calibration window
